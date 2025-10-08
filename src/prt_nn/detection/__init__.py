@@ -1,0 +1,11 @@
+"""
+Detection package for prt_nn.
+
+"""
+from .fast_rcnn import FastRCNNDetector
+from .yolo import YoloDetector
+
+__all__ = [
+    "FastRCNNDetector",
+    "YoloDetector",
+]

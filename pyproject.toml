@@ -1,0 +1,12 @@
+[project]
+name = "prt-nn"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "lightning>=2.5.5",
+    "torch>=2.8.0",
+    "torchmetrics[detection]>=1.8.2",
+    "ultralytics>=8.3.204",
+]
