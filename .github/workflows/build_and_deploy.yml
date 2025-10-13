@@ -1,0 +1,51 @@
+name: Build and Deploy PRT-NN Repo
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write  # Required for committing version bump
+  id-token: write  # Required for trusted publishing
+
+jobs:          
+  bump-version:
+    name: Bump Version
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install the latest version of uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "latest"
+
+      - name: Bump version
+        id: bumpversion
+        uses: jasonamyers/github-bumpversion-action@v1.0.5
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push changes
+        uses: ad-m/github-push-action@master
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          tags: true
+
+      - name: Install dependencies
+        run: uv sync
+        
+      - name: Build Package with uv
+        run: uv build
+  
+      - name: Publish to PyPI with uv
+        env:
+          UV_PYPI_TOKEN: ${{ secrets.PYPI_API_TOKEN }}
+        run: uv publish --token "$UV_PYPI_TOKEN"
+
+      - name: Trigger ReadTheDocs Build
+        run: |
+          curl -X POST -d "token=${{ secrets.RTD_API_TOKEN }}" https://readthedocs.org/api/v2/webhook/reinforcement-learning/286318/

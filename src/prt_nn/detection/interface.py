@@ -1,6 +1,6 @@
 import torch
 from typing import Protocol, List, Dict
-from prt_nn.detection.metrics import DetectionEvaluator, DetectionMetrics
+from prt_nn.detection.metrics import DetectionEvaluator, DetectionMetrics, SingleImageDetectionMetrics
 
 Prediction = Dict[str, torch.Tensor]  # {"boxes": (B,4), "scores": (B,), "labels": (B,)}
 Target  = Dict[str, torch.Tensor]     # {"boxes": (B,4), "labels": (B,)}
@@ -20,7 +20,7 @@ class BaseDetector(Protocol):
         """
         ...
 
-class DectectorInterface:
+class DetectorInterface:
     """
     Protocol for object detection models.
     
@@ -62,6 +62,18 @@ class DectectorInterface:
             DetectionMetrics object containing various evaluation metrics.
         """
         return self.evaluator.evaluate(predictions, targets)
+    
+    def evaluate_image(self, prediction: Prediction, target: Target) -> SingleImageDetectionMetrics:
+        """
+        Evaluate a single image's prediction against its target and return detection metrics.
+
+        Args:
+            prediction (Dict[str, torch.Tensor]): Prediction dict from the model for a single image.
+            target (Dict[str, torch.Tensor]): Ground truth dict for a single image.
+        Returns:
+            SingleImageDetectionMetrics object containing evaluation metrics for the image.
+        """
+        return self.evaluator.evaluate_image(prediction, target)
 
     def reset_metrics(self) -> None:
         """
@@ -96,7 +108,7 @@ if __name__ == "__main__":
     # from prt_nn.detection.fast_rcnn import FastRCNNDetector
     # model = FastRCNNDetector()
 
-    interface = DectectorInterface(model)
+    interface = DetectorInterface(model)
     dummy_images = (torch.randn(2, 3, 640, 640) * 255).to(torch.uint8)
     preds = interface.detect(dummy_images)
     print(preds)

@@ -1,8 +1,9 @@
-# prt_nn/tasks/detection/yolo_ultra.py
+import math
 from pathlib import Path
-from typing import List, Dict
+from typing import List, Dict, Tuple
 import torch
 from torch import Tensor
+import torch.nn.functional as F
 import prt_nn.common.utils as utils
 
 class YoloDetector:
@@ -102,7 +103,7 @@ class YoloDetector:
         try:
             from ultralytics import YOLO  # lazy import so dependency is optional
         except Exception as e:
-            raise ImportError("ultralytics is required for YOLOUltralyticsDet: pip install ultralytics") from e
+            raise ImportError("ultralytics is required for YoloDetector: pip install ultralytics") from e
         
         # If no pretrained weights are specified, use the default YOLOv8n
         if weights is None:
@@ -121,34 +122,86 @@ class YoloDetector:
     @torch.inference_mode()
     def predict(self, images: Tensor) -> List[Dict[str, Tensor]]:
         """
-        Perform inference on a batch of images.
-        
-        Args:
-            images: A batch of images as a tensor of shape (N, C, H, W) and dtype uint8 [0, 255].
-        Returns:
-            A list of predictions, one per image. Each prediction is a dict with keys:
-                - "boxes": Tensor of shape (num_boxes, 4) in xyxy format
-                - "scores": Tensor of shape (num_boxes,) with confidence scores
-                - "labels": Tensor of shape (num_boxes,) with class labels
-        """ 
-        if images.dtype == torch.uint8:
-            images = images.to(torch.float32) / 255.0  # Ultralytics accepts uint8, but cast to float32 for safety
+        Perform inference on a batch of images (BCHW). Handles stride padding internally.
 
+        Args:
+            images: (N, C, H, W) uint8 [0,255] or float32 [0,1]
+
+        Returns:
+            List[Dict]: per-image dicts with keys:
+              - "boxes":  (M, 4) xyxy in **original** image coords (padded area removed, clipped)
+              - "scores": (M,)
+              - "labels": (M,)
+        """
+        # 1) pad to stride-multiple, keep top-left anchored
+        images, meta = self._preprocess(images, stride=32, pad_value=114.0 / 255.0)
+        orig_h, orig_w = meta["orig_hw"]
+
+        # 2) run model (Ultralytics accepts BCHW float in [0,1])
         results = self.model(images, conf=self.confidence, iou=self.iou, max_det=self.max_det, verbose=False)
+
+        # 3) gather outputs, clip to original H,W (no translation needed; we padded bottom/right only)
         out: List[Dict[str, Tensor]] = []
+        device = images.device
         for r in results:
             b = r.boxes
             if b is None or b.xyxy.shape[0] == 0:
-                device = images.device
                 out.append({
-                    "boxes":  torch.zeros((0, 4), device=device),
-                    "scores": torch.zeros((0,), device=device),
-                    "labels": torch.zeros((0,), dtype=torch.long, device=device),
+                    "boxes":  torch.zeros((0, 4), device=device, dtype=torch.float32),
+                    "scores": torch.zeros((0,),   device=device, dtype=torch.float32),
+                    "labels": torch.zeros((0,),   device=device, dtype=torch.long),
                 })
                 continue
+
+            boxes = b.xyxy.detach()  # (M,4)
+            # clip against original dims to drop any padding region
+            boxes[:, [0, 2]] = boxes[:, [0, 2]].clamp_(min=0, max=orig_w)
+            boxes[:, [1, 3]] = boxes[:, [1, 3]].clamp_(min=0, max=orig_h)
+
             out.append({
-                "boxes":  b.xyxy.detach(),
+                "boxes":  boxes,
                 "scores": b.conf.detach(),
                 "labels": b.cls.to(torch.int64).detach(),
             })
         return out
+    
+    def _preprocess(
+        self,
+        images: Tensor,
+        stride: int = 32,
+        pad_value: float = 114.0 / 255.0,
+    ) -> Tuple[Tensor, dict]:
+        """
+        Make a BCHW batch stride-compatible by padding only on the **right** and **bottom**.
+        Keeps the top-left corner at (0,0), so no coordinate shift is needed for boxes.
+
+        Args:
+            images: (N, C, H, W) uint8 in [0,255] or float in [0,1]
+            stride: model stride (YOLO default is 32)
+            pad_value: padding value in [0,1] (Ultralytics uses ~114/255)
+
+        Returns:
+            images_out: (N, C, H', W') float32 in [0,1], with H',W' % stride == 0
+            meta: {"orig_hw": (H, W), "padded_hw": (H', W'), "pad": (0, pad_right, 0, pad_bottom)}
+        """
+        assert images.ndim == 4, "Expected BCHW"
+        n, c, h, w = images.shape
+
+        # to float32 in [0,1]
+        if images.dtype == torch.uint8:
+            images = images.to(torch.float32) / 255.0
+        elif images.dtype != torch.float32:
+            images = images.to(torch.float32)
+
+        new_h = math.ceil(h / stride) * stride
+        new_w = math.ceil(w / stride) * stride
+        pad_h = new_h - h
+        pad_w = new_w - w
+
+        if pad_h == 0 and pad_w == 0:
+            return images, {"orig_hw": (h, w), "padded_hw": (h, w), "pad": (0, 0, 0, 0)}
+
+        # F.pad pads in (left, right, top, bottom) for 4D tensors
+        images = F.pad(images, (0, pad_w, 0, pad_h), value=pad_value)
+        return images, {"orig_hw": (h, w), "padded_hw": (new_h, new_w), "pad": (0, pad_w, 0, pad_h)}
+

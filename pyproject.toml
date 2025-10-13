@@ -10,3 +10,12 @@ dependencies = [
     "torchmetrics[detection]>=1.8.2",
     "ultralytics>=8.3.204",
 ]
+
+[dependency-groups]
+dev = [
+    "myst-parser>=4.0.1",
+    "nbsphinx>=0.9.6",
+    "pytest>=8.4.2",
+    "sphinx>=8.2.3",
+    "sphinx-book-theme>=1.1.4",
+]
